@@ -1,11 +1,15 @@
 import sys
+import cv2
+import numpy as np
+import tempfile
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QPushButton,
     QLabel, QFileDialog, QMessageBox, QProgressBar, QStackedWidget, QDialog, QHBoxLayout
 )
-from PyQt5.QtGui import QPixmap, QFont
+from PyQt5.QtGui import QPixmap, QFont, QImage
 from PyQt5.QtCore import Qt, QTimer
 
+from Cropper import Cropper
 BUTTON_STYLE = """
 QPushButton {
     background-color: #007BFF;
@@ -21,6 +25,20 @@ QPushButton:hover {
 """
 
 
+def qpixmap_to_cv(qpixmap):
+    """
+    Преобразует QPixmap в numpy-массив, совместимый с OpenCV.
+    """
+    qimage = qpixmap.toImage().convertToFormat(QImage.Format_RGBA8888)
+    width = qimage.width()
+    height = qimage.height()
+    ptr = qimage.bits()
+    ptr.setsize(qimage.byteCount())
+    arr = np.array(ptr).reshape(height, width, 4)
+    # Преобразуем из RGBA в BGR
+    cv_img = cv2.cvtColor(arr, cv2.COLOR_RGBA2BGR)
+    return cv_img
+
 class StartScreen(QWidget):
     """Начальный экран."""
 
@@ -28,18 +46,15 @@ class StartScreen(QWidget):
         super().__init__()
         layout = QVBoxLayout()
         layout.setAlignment(Qt.AlignCenter)
-
         title = QLabel("Конвертер Таблиц")
         title.setFont(QFont("Arial", 32, QFont.Bold))
         title.setAlignment(Qt.AlignCenter)
         layout.addWidget(title)
-
         start_button = QPushButton("Начать работу")
         start_button.setFont(QFont("Arial", 16))
         start_button.setStyleSheet(BUTTON_STYLE)
         start_button.clicked.connect(switch_callback)
         layout.addWidget(start_button)
-
         self.setLayout(layout)
 
 
@@ -54,19 +69,17 @@ class CropConfirmationDialog(QDialog):
         self.selected = False
         self.resize(500, 500)
         layout = QVBoxLayout()
+        scaled_pixmap = pixmap.scaled(int(pixmap.width()), int(pixmap.height()),
+                                      Qt.KeepAspectRatio, Qt.SmoothTransformation)
 
-        scaled_pixmap = pixmap.scaled(525, 525, Qt.KeepAspectRatio, Qt.SmoothTransformation)
         self.image_label = QLabel()
         self.image_label.setPixmap(scaled_pixmap)
         self.image_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(self.image_label)
-
         question_label = QLabel("Правильно ли обрезалось фото?")
         question_label.setAlignment(Qt.AlignCenter)
         question_label.setFont(QFont("Arial", 14))
         layout.addWidget(question_label)
-
-        # Кнопки "Да" и "Нет"
         button_layout = QHBoxLayout()
         yes_button = QPushButton("Да")
         yes_button.setStyleSheet(BUTTON_STYLE)
@@ -77,7 +90,6 @@ class CropConfirmationDialog(QDialog):
         button_layout.addWidget(yes_button)
         button_layout.addWidget(no_button)
         layout.addLayout(button_layout)
-
         self.setLayout(layout)
 
     def accepted(self):
@@ -100,26 +112,19 @@ class ProcessingWindow(QDialog):
         self.finish_callback = finish_callback
         self.resize(800, 600)
         layout = QVBoxLayout()
-
         self.image_label = QLabel()
         self.image_label.setPixmap(pixmap.scaled(600, 400, Qt.KeepAspectRatio, Qt.SmoothTransformation))
         self.image_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(self.image_label)
-
         self.progress_bar = QProgressBar()
         self.progress_bar.setValue(0)
         layout.addWidget(self.progress_bar)
-
-        # Кнопка возврата, изначально скрыта
         self.return_button = QPushButton("Вернуться на главный экран")
         self.return_button.setStyleSheet(BUTTON_STYLE)
         self.return_button.setVisible(False)
         self.return_button.clicked.connect(self.on_return)
         layout.addWidget(self.return_button)
-
         self.setLayout(layout)
-
-        # загрузка
         self.progress = 0
         self.timer = QTimer()
         self.timer.timeout.connect(self.update_progress)
@@ -153,19 +158,16 @@ class MainWorkScreen(QWidget):
         self.setAcceptDrops(True)
         self.processing_callback = processing_callback
         self.layout = QVBoxLayout(self)
-
         self.upload_button = QPushButton("Загрузить фото таблицы")
         self.upload_button.setStyleSheet(BUTTON_STYLE)
         self.upload_button.clicked.connect(self.load_image)
         self.layout.addWidget(self.upload_button)
-
         self.image_label = QLabel("Перетащите фото сюда или нажмите кнопку")
         self.image_label.setAlignment(Qt.AlignCenter)
         self.image_label.setStyleSheet("border: 2px dashed #aaa; font-family: Arial; font-size: 16px;")
         self.layout.addWidget(self.image_label)
 
     def load_image(self):
-        """Открывает диалог выбора файла и загружает изображение."""
         options = QFileDialog.Options()
         fileName, _ = QFileDialog.getOpenFileName(
             self, "Выберите фото таблицы", "",
@@ -175,7 +177,6 @@ class MainWorkScreen(QWidget):
             self.display_image(fileName)
 
     def display_image(self, file_path):
-        """Отображает изображение и запускает детектирование таблицы."""
         pixmap = QPixmap(file_path)
         if pixmap.isNull():
             QMessageBox.warning(self, "Ошибка", "Не удалось загрузить изображение.")
@@ -183,29 +184,38 @@ class MainWorkScreen(QWidget):
         self.image_label.setPixmap(pixmap.scaled(
             self.image_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation
         ))
+        # Передаем QPixmap в detect_table
         self.detect_table(pixmap)
 
     def detect_table(self, pixmap):
         """
-       детектирования таблицы.
+        Конвертируем QPixmap в numpy-массив и передаём в Cropper.
         """
-        print("Вызов функции детектирования таблицы.")
-
-        self.show_crop_confirmation(pixmap)
+        try:
+            cv_image = qpixmap_to_cv(pixmap)
+            cropper = Cropper(cv_image)
+            temp_file = tempfile.NamedTemporaryFile(suffix=".jpg", delete=False)
+            temp_path = temp_file.name
+            temp_file.close()
+            cropped_file_path = cropper.extract_and_save_table(temp_path, padding=10)
+            if cropped_file_path:
+                cropped_pixmap = QPixmap(cropped_file_path)
+                self.show_crop_confirmation(cropped_pixmap)
+            else:
+                QMessageBox.warning(self, "Ошибка", "Не удалось извлечь таблицу.")
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", str(e))
 
     def show_crop_confirmation(self, pixmap):
         dialog = CropConfirmationDialog(pixmap)
         result = dialog.exec_()
         if dialog.selected:
-            # Если пользователь подтверждает, запускаем окно обработки
             self.processing_callback(pixmap)
-            # Очищаем текущее изображение
             self.image_label.clear()
             self.image_label.setText("Перетащите фото сюда или нажмите кнопку")
         else:
             QMessageBox.information(self, "Отмена", "Пожалуйста, загрузите другое фото.")
 
-    # Добавляем поддержку drag & drop
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():
             event.acceptProposedAction()
@@ -225,29 +235,19 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("Конвертер Таблиц")
         self.stack = QStackedWidget()
         self.setCentralWidget(self.stack)
-
-        # Стартовый экран
         self.start_screen = StartScreen(self.switch_to_main)
         self.stack.addWidget(self.start_screen)
-
-        # Экран выбора фото
         self.main_work_screen = MainWorkScreen(self.open_processing_window)
         self.stack.addWidget(self.main_work_screen)
 
     def switch_to_main(self):
-        """Переход от стартового экрана к рабочему."""
         self.stack.setCurrentWidget(self.main_work_screen)
 
     def open_processing_window(self, pixmap):
-        """
-        Создаёт и показывает окно обработки.
-        После завершения обработки пользователь вернется на стартовый экран.
-        """
         processing_win = ProcessingWindow(pixmap, self.return_to_start)
         processing_win.exec_()
 
     def return_to_start(self):
-        """Возврат на стартовый экран."""
         self.stack.setCurrentWidget(self.start_screen)
 
 
