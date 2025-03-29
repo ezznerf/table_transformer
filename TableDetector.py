@@ -114,32 +114,72 @@ class TableDetector:
         print("Словарь ячеек:", cells_dict)
         return cells_dict
 
+    def _detect_nested_cells(self, thresh, cell):
+        """
+        Рекурсивное определение вложенных ячеек внутри заданной ячейки.
+        """
+        x1, y1, x2, y2 = cell
+        cell_image = thresh[y1:y2, x1:x2]  # Вырезаем ячейку
+
+        # Поиск горизонтальных линий внутри ячейки
+        rows = self._detect_horizontal_lines_structure(cell_image)
+        nested_cells = []
+
+        for row_start, row_end in rows:
+            # Приводим координаты строки к координатам оригинального изображения
+            row_start += y1
+            row_end += y1
+
+            # Поиск вертикальных линий в данной строке
+            cells = self._detect_vertical_lines_in_row(thresh, row_start, row_end)
+            for cx1, cy1, cx2, cy2 in cells:
+                # Приводим координаты ячейки к координатам исходного изображения
+                nested_cells.append((cx1 + x1, cy1, cx2 + x1, cy2))
+        return nested_cells
+
     def detect_table_structure(self):
-        # Реализация аналогична предыдущей функции detect_table_structure
-        # Здесь можно добавить рекурсивное определение вложенных ячеек
-        # Для краткости приведём упрощённую версию без рекурсии
+        """
+        Основная функция детектирования таблицы:
+         - Поиск строк (горизонтальных линий)
+         - Поиск ячеек в каждой строке (вертикальных линий)
+         - Рекурсивный поиск вложенных ячеек
+         - Отрисовка итоговой сетки с диагоналями
+        """
+        # 1. Поиск строк
         rows = self._detect_horizontal_lines_structure(self.thresh)
+        #cv2_imshow(self.thresh)  # Для отладки, можно отключить при финальном запуске
+
         all_cells = []
+        # 2. Поиск ячеек в каждой строке
         for row_start, row_end in rows:
             cells = self._detect_vertical_lines_in_row(self.thresh, row_start, row_end)
-            all_cells.extend(cells)
             for cell in cells:
+                all_cells.append(cell)
+
+                # 3. Рекурсивный поиск вложенных ячеек
+                nested = self._detect_nested_cells(self.thresh, cell)
+                all_cells.extend(nested)
+
+                # Вывод ячейки для отладки (по желанию)
                 print(f'Ячейка: {cell}')
                 x1, y1, x2, y2 = cell
                 cell_image = self.image[y1:y2, x1:x2]
                 plt.figure(figsize=(5, 5))
-                # plt.imshow(cv2.cvtColor(cell_image, cv2.COLOR_BGR2RGB))
-                # plt.axis('off')
-                # plt.show()
-        # Визуализация итоговой сетки
+                plt.imshow(cv2.cvtColor(cell_image, cv2.COLOR_BGR2RGB))
+                plt.axis('off')
+                plt.show()
+
+        # 4. Визуализация итоговой сетки с диагоналями
         output_image = self.image.copy()
         for (x1, y1, x2, y2) in all_cells:
-            cv2.rectangle(output_image, (x1, y1), (x2, y2), (0, 255, 0), 2)
-            cv2.line(output_image, (x1, y1), (x2, y2), (255, 0, 0), 2)
+            cv2.rectangle(output_image, (x1, y1), (x2, y2), (0, 255, 0), 2)  # Контур
+            cv2.line(output_image, (x1, y1), (x2, y2), (255, 0, 0), 2)  # Диагональ
+
         plt.figure(figsize=(12, 8))
         # plt.imshow(cv2.cvtColor(output_image, cv2.COLOR_BGR2RGB))
-        plt.axis('on')
+        # plt.axis('on')
         # plt.show()
+
         return all_cells
 
     def _detect_horizontal_lines_structure(self, thresh):
@@ -169,12 +209,19 @@ class TableDetector:
         return rows
 
     def _detect_vertical_lines_in_row(self, thresh, row_start, row_end):
-        row_image = thresh[row_start:row_end, :]
+        """Находит вертикальные линии в строке и формирует границы ячеек"""
+        row_image = thresh[row_start:row_end, :]  # Вырезаем строку по её границам
+
+        # Проверка, не пустое ли изображение
         if row_image.size == 0:
             return []
-        vertical_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, 50))
-        detect_vertical = cv2.morphologyEx(row_image, cv2.MORPH_OPEN, vertical_kernel, iterations=2)
+
+        vertical_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, 30))
+        detect_vertical = cv2.morphologyEx(row_image, cv2.MORPH_OPEN, vertical_kernel, iterations=1)
+        # cv2_imshow(detect_vertical)
         cnts, _ = cv2.findContours(detect_vertical, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        lines = sorted([cv2.boundingRect(c)[0] for c in cnts])
+        lines = sorted([cv2.boundingRect(c)[0] for c in cnts])  # Берём X-координаты
+
+        # Формируем ячейки между вертикальными линиями
         cells = [(lines[i], row_start, lines[i + 1], row_end) for i in range(len(lines) - 1)]
         return cells
