@@ -15,13 +15,13 @@ class Cropper:
         else:
             raise TypeError("image_input должен быть либо путем к файлу, либо numpy-массивом.")
 
-    def extract_and_save_table(self, output_path, padding=10):
+    def extract_and_save_table(self, output_path, padding_x=10, padding_y=10):
         """
         Извлекает таблицу и сохраняет обрезанное изображение в output_path.
         :return: output_path, если успешно, иначе None.
         """
         try:
-            cropped_image = self.extract_table(padding)
+            cropped_image = self.extract_table(padding_x, padding_y)
             if cropped_image is not None:
                 cv2.imwrite(output_path, cropped_image)
                 return output_path
@@ -30,7 +30,7 @@ class Cropper:
             print(f"Ошибка при сохранении: {str(e)}")
             return None
 
-    def extract_table(self, padding=10):
+    def extract_table(self, padding_x=0, padding_y=0):
         """
         Извлекает область таблицы с изображения.
         :return: numpy array с обрезанным изображением или None.
@@ -53,7 +53,7 @@ class Cropper:
         if not contours:
             return None
         x, y, w, h = cv2.boundingRect(max(contours, key=cv2.contourArea))
-        x, y, w, h = self._apply_padding(x, y, w, h, padding)
+        x, y, w, h = self._apply_padding(x, y, w, h, padding_x, padding_y)
         return self.image[y:y + h, x:x + w]
 
     def _get_lines(self, binary_img, axis):
@@ -67,10 +67,10 @@ class Cropper:
         img = cv2.dilate(img, kernel)
         return img
 
-    def _apply_padding(self, x, y, w, h, padding):
-        """Вспомогательный метод для добавления отступов"""
-        new_x = max(0, x - padding)
-        new_y = max(0, y - padding)
-        new_w = min(self.image.shape[1] - new_x, w + 2 * padding)
-        new_h = min(self.image.shape[0] - new_y, h + 2 * padding)
+    def _apply_padding(self, x, y, w, h, padding_x, padding_y):
+        """Вспомогательный метод для добавления разного отступа по горизонтали и вертикали"""
+        new_x = max(0, x - padding_x)
+        new_y = max(0, y - padding_y)
+        new_w = min(self.image.shape[1] - new_x, w + 2 * padding_x)
+        new_h = min(self.image.shape[0] - new_y, h + 2 * padding_y)
         return new_x, new_y, new_w, new_h
