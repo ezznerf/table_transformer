@@ -4,10 +4,14 @@ import numpy as np
 import tempfile
 from StructureFinder import StructureFinder
 from PyQt5.QtCore import QThread, pyqtSignal
+from datetime import datetime
+from TableProcessor import TableProcessor
+import os
 
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QPushButton,
-    QLabel, QFileDialog, QMessageBox, QProgressBar, QStackedWidget, QDialog, QHBoxLayout
+    QLabel, QFileDialog, QMessageBox, QProgressBar, QStackedWidget,
+    QDialog, QHBoxLayout, QLineEdit, QFormLayout
 )
 from PyQt5.QtGui import QPixmap, QFont, QImage
 from PyQt5.QtCore import Qt, QTimer
@@ -30,18 +34,15 @@ QPushButton:hover {
 
 
 def qpixmap_to_cv(qpixmap):
-    """
-    Преобразует QPixmap в numpy-массив, совместимый с OpenCV.
-    """
     qimage = qpixmap.toImage().convertToFormat(QImage.Format_RGBA8888)
     width = qimage.width()
     height = qimage.height()
     ptr = qimage.bits()
     ptr.setsize(qimage.byteCount())
     arr = np.array(ptr).reshape(height, width, 4)
-    # Преобразуем из RGBA в BGR
     cv_img = cv2.cvtColor(arr, cv2.COLOR_RGBA2BGR)
     return cv_img
+
 
 def pil2pixmap(im):
     if im.mode != "RGBA":
@@ -52,8 +53,6 @@ def pil2pixmap(im):
 
 
 class StartScreen(QWidget):
-    """Начальный экран."""
-
     def __init__(self, switch_callback):
         super().__init__()
         layout = QVBoxLayout()
@@ -70,11 +69,51 @@ class StartScreen(QWidget):
         self.setLayout(layout)
 
 
-class CropConfirmationDialog(QDialog):
-    """
-    Окно подтверждения обрезки.
-    """
+class SettingsDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Настройки программы")
+        self.setFixedSize(300, 200)
 
+        layout = QVBoxLayout()
+
+        self.padding_x_edit = QLineEdit()
+        self.padding_y_edit = QLineEdit()
+        self.scale_edit = QLineEdit()
+
+        self.save_btn = QPushButton("Сохранить")
+        self.save_btn.setStyleSheet(BUTTON_STYLE)
+        self.cancel_btn = QPushButton("Отмена")
+        self.cancel_btn.setStyleSheet(BUTTON_STYLE)
+
+        form_layout = QFormLayout()
+        form_layout.addRow("Горизонтальный отступ (padding_x):", self.padding_x_edit)
+        form_layout.addRow("Вертикальный отступ (padding_y):", self.padding_y_edit)
+        form_layout.addRow("Масштаб изображения:", self.scale_edit)
+
+        button_layout = QHBoxLayout()
+        button_layout.addWidget(self.save_btn)
+        button_layout.addWidget(self.cancel_btn)
+
+        layout.addLayout(form_layout)
+        layout.addLayout(button_layout)
+        self.setLayout(layout)
+
+        self.save_btn.clicked.connect(self.accept)
+        self.cancel_btn.clicked.connect(self.reject)
+
+    def get_settings(self):
+        try:
+            return {
+                'padding_x': int(self.padding_x_edit.text()),
+                'padding_y': int(self.padding_y_edit.text()),
+                'scale_factor': float(self.scale_edit.text())
+            }
+        except:
+            return None
+
+
+class CropConfirmationDialog(QDialog):
     def __init__(self, pixmap):
         super().__init__()
         self.setWindowTitle("Подтверждение обрезки")
@@ -114,20 +153,28 @@ class CropConfirmationDialog(QDialog):
 
 
 class ProcessingWindow(QDialog):
-    """
-    Окно обработки.
-    """
-
-    def __init__(self, image_path, finish_callback):
+    def __init__(self, image_path, excel_path, finish_callback, scale_factor):
         super().__init__()
         self.setWindowTitle("Обработка таблицы")
         self.finish_callback = finish_callback
         self.image_path = image_path
+        self.excel_path = excel_path
+        self.scale_factor = scale_factor
         self.resize(800, 600)
 
         layout = QVBoxLayout()
 
-        self.image_label = QLabel("Обработка...")
+        self.image_label = QLabel()
+        pixmap = QPixmap(image_path)
+
+        scaled_pixmap = pixmap.scaled(
+            int(pixmap.width() * self.scale_factor),
+            int(pixmap.height() * self.scale_factor),
+            Qt.KeepAspectRatio,
+            Qt.SmoothTransformation
+        )
+
+        self.image_label.setPixmap(scaled_pixmap)
         self.image_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(self.image_label)
 
@@ -150,44 +197,42 @@ class ProcessingWindow(QDialog):
 
         QTimer.singleShot(500, self.process_image)
 
+    def update_progress(self):
+        if self.progress < 100:
+            self.progress += 100 / 40
+            self.progress_bar.setValue(int(self.progress))
+        else:
+            self.timer.stop()
+
     def process_image(self):
-        """
-        Обрабатываем изображение с помощью StructureFinder.
-        """
         detector = StructureFinder()
-        result = detector.detect(self.image_path, resize_factor=0.8, threshold=0.97)
+        result = detector.detect(self.image_path, resize_factor=1, threshold=0.97)
 
         if result:
-            temp_file = tempfile.NamedTemporaryFile(suffix=".jpg", delete=False)
-            output_path = temp_file.name
-            temp_file.close()
+            processed_image = detector.visualize_detections(result, "processed_output.jpg")
+            self.update_image("processed_output.jpg")
 
-            processed_image = detector.visualize_detections(result, output_path)
-            self.update_image(processed_image)
+            table_processor = TableProcessor(self.image_path, self.excel_path, lang='rus')
+            try:
+                table_processor.process()
+                QTimer.singleShot(4100, self.processing_finished)
+            except Exception as e:
+                QMessageBox.critical(self, "Ошибка", f"Ошибка обработки: {str(e)}")
+                self.close()
 
-    def update_progress(self):
-        """
-        Анимация загрузки.
-        """
-        self.progress += (100 / 7000) * 100
-        if self.progress >= 100:
-            self.progress_bar.setValue(100)
-            self.timer.stop()
-            self.processing_finished()
-        else:
-            self.progress_bar.setValue(int(self.progress))
-
-    def update_image(self, processed_image):
-        """
-        Показываем обработанное изображение
-        """
-        pixmap = pil2pixmap(processed_image)
-        scaled_pixmap = pixmap.scaled(int(pixmap.width() * 1), int(pixmap.height() * 1),
-                                      Qt.KeepAspectRatio, Qt.SmoothTransformation)
+    def update_image(self, image_path):
+        pixmap = QPixmap(image_path)
+        scaled_pixmap = pixmap.scaled(
+            int(pixmap.width() * self.scale_factor),
+            int(pixmap.height() * self.scale_factor),
+            Qt.KeepAspectRatio,
+            Qt.SmoothTransformation
+        )
         self.image_label.setPixmap(scaled_pixmap)
 
     def processing_finished(self):
-        QMessageBox.information(self, "Завершено", "Таблица успешно обработана!")
+        QMessageBox.information(self, "Завершено",
+                                f"Таблица успешно обработана!\nExcel-файл сохранён:\n{self.excel_path}")
         self.return_button.setVisible(True)
 
     def on_return(self):
@@ -196,23 +241,46 @@ class ProcessingWindow(QDialog):
 
 
 class MainWorkScreen(QWidget):
-    """
-    Основной экран выбора фото.
-    """
-
     def __init__(self, processing_callback):
         super().__init__()
         self.setAcceptDrops(True)
         self.processing_callback = processing_callback
+        self.settings = {
+            'padding_x': 0,
+            'padding_y': 0,
+            'scale_factor': 0.9
+        }
+
         self.layout = QVBoxLayout(self)
+
+        # Кнопка настроек
+        self.settings_button = QPushButton("Настройки")
+        self.settings_button.setStyleSheet(BUTTON_STYLE)
+        self.settings_button.clicked.connect(self.show_settings)
+        self.layout.addWidget(self.settings_button)
+
         self.upload_button = QPushButton("Загрузить фото таблицы")
         self.upload_button.setStyleSheet(BUTTON_STYLE)
         self.upload_button.clicked.connect(self.load_image)
         self.layout.addWidget(self.upload_button)
+
         self.image_label = QLabel("Перетащите фото сюда или нажмите кнопку")
         self.image_label.setAlignment(Qt.AlignCenter)
         self.image_label.setStyleSheet("border: 2px dashed #aaa; font-family: Arial; font-size: 16px;")
         self.layout.addWidget(self.image_label)
+
+    def show_settings(self):
+        dialog = SettingsDialog(self)
+        dialog.padding_x_edit.setText(str(self.settings['padding_x']))
+        dialog.padding_y_edit.setText(str(self.settings['padding_y']))
+        dialog.scale_edit.setText(str(self.settings['scale_factor']))
+
+        if dialog.exec_():
+            new_settings = dialog.get_settings()
+            if new_settings:
+                self.settings.update(new_settings)
+            else:
+                QMessageBox.warning(self, "Ошибка", "Некорректные значения настроек")
 
     def load_image(self):
         options = QFileDialog.Options()
@@ -231,23 +299,22 @@ class MainWorkScreen(QWidget):
         self.image_label.setPixmap(pixmap.scaled(
             self.image_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation
         ))
-        # Передаем QPixmap в detect_table
         self.detect_table(pixmap)
 
     def detect_table(self, pixmap):
-        """
-        Конвертируем QPixmap в numpy-массив и передаём в Cropper.
-        """
         try:
             cv_image = qpixmap_to_cv(pixmap)
             cropper = Cropper(cv_image)
 
-            # Создаём временный файл для обрезанного изображения
             temp_file = tempfile.NamedTemporaryFile(suffix=".jpg", delete=False)
             temp_path = temp_file.name
             temp_file.close()
 
-            cropped_file_path = cropper.extract_and_save_table(temp_path, padding=10)
+            cropped_file_path = cropper.extract_and_save_table(
+                temp_path,
+                padding_x=self.settings['padding_x'],
+                padding_y=self.settings['padding_y']
+            )
 
             if cropped_file_path:
                 cropped_pixmap = QPixmap(cropped_file_path)
@@ -258,14 +325,24 @@ class MainWorkScreen(QWidget):
             QMessageBox.critical(self, "Ошибка", str(e))
 
     def show_crop_confirmation(self, pixmap, image_path):
-        """
-        Показывает окно подтверждения и передаёт путь к изображению дальше.
-        """
         dialog = CropConfirmationDialog(pixmap)
         result = dialog.exec_()
 
         if dialog.selected:
-            self.processing_callback(image_path)
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            default_name = f"tabel_{timestamp}.xlsx"
+            save_path, _ = QFileDialog.getSaveFileName(
+                self, "Сохранить Excel файл", default_name, "Excel Files (*.xlsx)"
+            )
+
+            if save_path:
+                if not save_path.endswith('.xlsx'):
+                    save_path += '.xlsx'
+                self.processing_callback(image_path, save_path)
+            else:
+                QMessageBox.information(self, "Отмена", "Сохранение отменено")
+                return
+
             self.image_label.clear()
             self.image_label.setText("Перетащите фото сюда или нажмите кнопку")
         else:
@@ -283,8 +360,6 @@ class MainWorkScreen(QWidget):
 
 
 class MainWindow(QMainWindow):
-    """Главное окно приложения."""
-
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Конвертер Таблиц")
@@ -298,27 +373,13 @@ class MainWindow(QMainWindow):
     def switch_to_main(self):
         self.stack.setCurrentWidget(self.main_work_screen)
 
-    def open_processing_window(self, image_path):
-        processing_win = ProcessingWindow(image_path, self.return_to_start)
+    def open_processing_window(self, image_path, excel_path):
+        scale = self.main_work_screen.settings['scale_factor']
+        processing_win = ProcessingWindow(image_path, excel_path, self.return_to_start, scale)
         processing_win.exec_()
 
     def return_to_start(self):
         self.stack.setCurrentWidget(self.start_screen)
-
-
-class ProcessingThread(QThread):
-    finished = pyqtSignal(str)
-
-    def __init__(self, image_path):
-        super().__init__()
-        self.image_path = image_path
-
-    def run(self):
-        detector = StructureFinder()
-        result = detector.detect(self.image_path, resize_factor=0.8, threshold=0.97)
-        if result:
-            processed_image = detector.visualize_detections(result, "final_output.jpg")
-            self.finished.emit("final_output.jpg")
 
 
 if __name__ == "__main__":

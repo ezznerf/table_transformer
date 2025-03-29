@@ -165,9 +165,9 @@ class TableDetector:
                 x1, y1, x2, y2 = cell
                 cell_image = self.image[y1:y2, x1:x2]
                 plt.figure(figsize=(5, 5))
-                plt.imshow(cv2.cvtColor(cell_image, cv2.COLOR_BGR2RGB))
-                plt.axis('off')
-                plt.show()
+                # plt.imshow(cv2.cvtColor(cell_image, cv2.COLOR_BGR2RGB))
+                # plt.axis('off')
+                # plt.show()
 
         # 4. Визуализация итоговой сетки с диагоналями
         output_image = self.image.copy()
