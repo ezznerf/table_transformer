@@ -13,7 +13,7 @@ class ExcelHelper:
         return df
 
     @staticmethod
-    def create_empty_excel_file(cells_dict, file_name='empty_table_with_borders.xlsx'):
+    def create_empty_excel_file(cells_dict, file_name='images/empty_table_with_borders.xlsx'):
         max_col = max([column_index_from_string(ExcelHelper.split_cell_name(cell)[0]) for cell in cells_dict.keys()])
         max_row = max([ExcelHelper.split_cell_name(cell)[1] for cell in cells_dict.keys()])
         print("Макс. номер колонки:", max_col)
@@ -45,7 +45,7 @@ class ExcelHelper:
 
     @staticmethod
     def create_excel(excel_name, text_to_cells):
-        file_name = 'empty_table_with_borders.xlsx'
+        file_name = 'images/empty_table_with_borders.xlsx'
         wb = openpyxl.load_workbook(file_name)
         ws = wb.active
 

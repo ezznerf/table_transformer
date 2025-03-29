@@ -209,8 +209,8 @@ class ProcessingWindow(QDialog):
         result = detector.detect(self.image_path, resize_factor=1, threshold=0.97)
 
         if result:
-            processed_image = detector.visualize_detections(result, "processed_output.jpg")
-            self.update_image("processed_output.jpg")
+            processed_image = detector.visualize_detections(result, "images/processed_output.jpg")
+            self.update_image("images/processed_output.jpg")
 
             table_processor = TableProcessor(self.image_path, self.excel_path, lang='rus')
             try:
@@ -330,7 +330,7 @@ class MainWorkScreen(QWidget):
 
         if dialog.selected:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            default_name = f"tabel_{timestamp}.xlsx"
+            default_name = f"table_{timestamp}.xlsx"
             save_path, _ = QFileDialog.getSaveFileName(
                 self, "Сохранить Excel файл", default_name, "Excel Files (*.xlsx)"
             )
